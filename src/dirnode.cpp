@@ -22,7 +22,7 @@ float gGourceMinDirSize   = 15.0;
 
 float gGourceForceGravity = 10.0;
 
-bool  gGourceNodeDebug    = false;
+bool  gGourceNodeDebug    = true;
 bool  gGourceGravity      = true;
 
 //debugging
@@ -410,8 +410,8 @@ bool RDirNode::addFile(RFile* f) {
 
         files.push_back(f);
         if (parent == 0) {
-            float rx = (rand() % 200 - 100) / 100.0f;
-            float ry = (rand() % 200 - 100) / 100.0f;
+            float rx = (rand() % 200 - 100) / 10.0f;
+            float ry = (rand() % 200 - 100) / 10.0f;
             f->setPos(f->getPos() + vec2(rx, ry));
         }
         if(!f->isHidden()) visible_count++;
@@ -908,22 +908,35 @@ void RDirNode::calcEdges() {
     }
 }
 
+#include <fstream>
+
 void RDirNode::applyFilePhysics(float dt) {
     if (files.empty() || !gGourceSettings.scale_by_file_size) return;
 
-    const int iterations = 2;
+    const int iterations = 20;
+    const float max_velocity = 200.0f;
+    const float spring_constant = 0.0005f;
+    const float repulsion_constant = 0.05f;
+    const float max_acceleration = 500.0f;
+    const float velocity_threshold = 0.01f;
+    const float outward_force = 0.01f;
+
+    std::ofstream log_file;
+    if (gGourceNodeDebug) {
+        log_file.open("physics.log");
+    }
+
     for (int i = 0; i < iterations; ++i) {
         // Apply forces
         for (auto it1 = files.begin(); it1 != files.end(); ++it1) {
             RFile* f1 = *it1;
             if (f1->isHidden()) continue;
 
-            // Gravity
+            // Gravity spring
             vec2 dir_to_center = pos - f1->getPos();
-            float dist_to_center = glm::length(dir_to_center);
-            f1->accel += normalise(dir_to_center) * dist_to_center * gGourceSettings.file_gravity;
+            f1->accel += dir_to_center * spring_constant * gGourceSettings.file_gravity;
 
-            // Repulsion from other files
+            // Repulsion
             for (auto it2 = std::next(it1); it2 != files.end(); ++it2) {
                 RFile* f2 = *it2;
                 if (f2->isHidden()) continue;
@@ -934,26 +947,52 @@ void RDirNode::applyFilePhysics(float dt) {
                 float r2 = f2->getSize() / 2.0f;
                 float r_sum = r1 + r2;
 
-                if (dist2 < r_sum * r_sum) {
+                if (dist2 < r_sum * r_sum && dist2 > 0.0f) {
                     float dist = sqrt(dist2);
-                    float overlap = r_sum - dist;
-                    vec2 force = normalise(dir) * overlap * gGourceSettings.file_repulsion;
+                    vec2 force = normalise(dir) * repulsion_constant * gGourceSettings.file_repulsion / dist;
                     f1->accel -= force;
                     f2->accel += force;
                 }
             }
+
+            // Outward force
+            float rx = (rand() % 200 - 100) / 100.0f;
+            float ry = (rand() % 200 - 100) / 100.0f;
+            f1->accel += vec2(rx, ry) * outward_force;
         }
 
         // Update positions
         for (RFile* f : files) {
             if (f->isHidden()) continue;
+
+            float accel_mag = glm::length(f->accel);
+            if (accel_mag > max_acceleration) {
+                f->accel = normalise(f->accel) * max_acceleration;
+            }
+
             f->vel += f->accel * dt;
+            float speed = glm::length(f->vel);
+            if (speed > max_velocity) {
+                f->vel = normalise(f->vel) * max_velocity;
+            }
+
+            if (glm::length2(f->vel) < velocity_threshold * velocity_threshold) {
+                f->vel = vec2(0.0f, 0.0f);
+            }
+
             f->setPos(f->getPos() + f->vel * dt);
-            f->vel *= 0.9f; // Damping
+            f->vel *= (1.0f - 0.999f * dt); // Damping
             f->accel = vec2(0.0f, 0.0f);
+
+            if (gGourceNodeDebug) {
+                log_file << "file: " << f->getName() << ", pos: (" << f->getPos().x << ", " << f->getPos().y << "), vel: (" << f->vel.x << ", " << f->vel.y << "), accel: (" << f->accel.x << ", " << f->accel.y << ")\n";
+            }
         }
     }
 }
+
+
+
 
 void RDirNode::logic(float dt) {
 
